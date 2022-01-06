@@ -1,6 +1,6 @@
 # Reiny
 
-A project evaluating how federated learning attacks and defense are impact by techniques that reduce
+A project evaluating how federated learning attacks and defense are impacted by techniques that reduce
 communication overhead.
 
 ## Executing
