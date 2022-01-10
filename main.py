@@ -2,6 +2,7 @@
 Evaluation of heterogeneous techniques applied to viceroy.
 """
 
+import logging
 
 import pandas as pd
 
@@ -161,4 +162,5 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

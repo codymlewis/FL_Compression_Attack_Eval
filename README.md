@@ -14,3 +14,10 @@ Then the main experiments can be run with:
 ```sh
 python main.py
 ```
+
+## Quick recreation
+
+The main experiment can be quickly recreated using docker with:
+```sh
+docker run ghcr.io/codymlewis/reiny:latest
+```
