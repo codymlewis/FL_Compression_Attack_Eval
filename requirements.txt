@@ -1,5 +1,5 @@
 pandas
 tqdm
-git+https://github.com/codymlewis/hkzoo.git@001bb2c
-git+https://github.com/codymlewis/tenjin.git@2d56328
-git+https://github.com/codymlewis/ymir.git@050ab63
+git+https://github.com/codymlewis/hkzoo.git@3f87526
+git+https://github.com/codymlewis/tenjin.git@0a2747b
+git+https://github.com/codymlewis/ymir.git

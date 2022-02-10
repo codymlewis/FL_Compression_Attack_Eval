@@ -9,7 +9,6 @@ import tenjin; \
 import logging; \
 logging.basicConfig(level=logging.INFO); \
 tenjin.download('/app/data', 'mnist'); \
-tenjin.download('/app/data', 'cifar10'); \
 tenjin.download('/app/data', 'kddcup99'); \
 "
 
