@@ -14,4 +14,4 @@ tenjin.download('/app/data', 'kddcup99'); \
 
 COPY . /app
 WORKDIR /app
-ENTRYPOINT ["python3", "main.py"]
+ENTRYPOINT ["./experiments.sh"]

@@ -1,4 +1,5 @@
 pandas
+openpyxl
 tqdm
 git+https://github.com/codymlewis/hkzoo.git@3f87526
 git+https://github.com/codymlewis/tenjin.git@0a2747b
