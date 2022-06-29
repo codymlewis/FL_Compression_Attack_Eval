@@ -1,3 +1,5 @@
 __pycache__/
 data/
 results.xlsx
+tags
+Session.vim
