@@ -9,8 +9,9 @@ import numpy as np
 import optax
 import os
 import pandas as pd
-import tenjin
 from tqdm import trange
+import datasets
+import einops
 import ymir
 
 import models
@@ -18,7 +19,7 @@ import network as network_lib
 import compression as compression_lib
 
 
-def loss_fn(model):
+def ce_loss(model):
 
     @jax.jit
     def _loss(params, X, y):
@@ -29,11 +30,43 @@ def loss_fn(model):
     return _loss
 
 
+def accuracy_fn(model):
+    @jax.jit
+    def _apply(params, X, y):
+        return jnp.mean(jnp.argmax(model.apply(params, X), axis=-1) == y)
+    return _apply
+
+
+def asr_fn(model, attack_from, attack_to):
+    @jax.jit
+    def _apply(params, X, y):
+        preds = jnp.where(y == attack_from, jnp.argmax(model.apply(params, X), axis=-1), -1)
+        return jnp.sum(preds == attack_to) / jnp.sum(y == attack_from)
+    return _apply
+
+
+def load_dataset(dataset_name):
+    ds = datasets.load_dataset(dataset_name)
+    ds = ds.map(
+        lambda e: {
+            'X': einops.rearrange(np.array(e['image'], dtype=np.float32) / 255, "h (w c) -> h w c", c=1),
+            'Y': e['label']
+        },
+        remove_columns=['image', 'label']
+    )
+    features = ds['train'].features
+    features['X'] = datasets.Array3D(shape=(28, 28, 1), dtype='float32')
+    ds['train'] = ds['train'].cast(features)
+    ds['test'] = ds['test'].cast(features)
+    ds.set_format('numpy')
+    return ds
+
+
 def main(args):
     dataset_name = args.dataset
     aggregation = args.agg
     attack = args.attack
-    attack_from, attack_to = (0, 11) if dataset_name == "kddcup99" else (0, 1)
+    attack_from, attack_to = (0, 1)
     percent_adv = args.aper
     compression = args.comp
     local_epochs = 10
@@ -41,7 +74,7 @@ def main(args):
 
     print(f"Running a {compression}-{aggregation} system on {dataset_name} with {percent_adv:.0%} {attack} adversaries.")
     print("Setting up the system...")
-    num_clients = 100
+    num_clients = 10
     num_adversaries = int(num_clients * percent_adv)
     num_honest = num_clients - num_adversaries
     rng = np.random.default_rng(0)
@@ -53,64 +86,66 @@ def main(args):
         agg_kwargs['eps'] = 3758
 
     # Setup the dataset
-    dataset = ymir.mp.datasets.Dataset(*tenjin.load(dataset_name))
+    dataset = ymir.utils.datasets.Dataset(load_dataset(dataset_name))
     batch_sizes = [32 for _ in range(num_clients)]
-    data = dataset.fed_split(batch_sizes, ymir.mp.distributions.lda, rng)
+    data = dataset.fed_split(batch_sizes, ymir.utils.distributions.lda, rng)
     train_eval = dataset.get_iter("train", 10_000, rng=rng)
     test_eval = dataset.get_iter("test", rng=rng)
 
     # Setup the network
-    net = models.LeNet_300_100(dataset.classes)
+    net = models.LeNet(dataset.classes)
     if compression == "fedprox":
         client_opt = ymir.client.fedprox.pgd(optax.sgd(0.1), 0.01, local_epochs=local_epochs)
     else:
         client_opt = optax.sgd(0.1)
     params = net.init(jax.random.PRNGKey(42), next(test_eval)[0])
-    client_opt_state = client_opt.init(params)
     if compression == "fedmax":
-        loss = ymir.client.fedmax.loss(net)
+        loss_fn = ymir.client.fedmax.loss
     else:
-        loss = loss_fn(net)
+        loss_fn = ce_loss
+    global network
     network = network_lib.Network()
     for i in range(num_honest):
-        network.add_client(ymir.client.Client(client_opt, client_opt_state, loss, data[i], local_epochs))
+        network.add_client(ymir.client.Client(params, client_opt, loss_fn(net.clone()), data[i], local_epochs))
     for i in range(num_adversaries):
-        c = ymir.client.Client(client_opt, client_opt_state, loss, data[i + num_honest], local_epochs)
-        ymir.attacks.labelflipper.convert(c, dataset, attack_from, attack_to)
+        adv_data = dataset.get_iter("train", 32, rng=rng)
+        c = ymir.client.Client(params, client_opt, loss_fn(net.clone()), adv_data, local_epochs)
+        ymir.attacks.label_flipper.convert(c, attack_from, attack_to)
         # if attack == "onoff":
-        #   ymir.fritzonoff.convert(c)
-        network.add_host(c)
+        #   onoff.convert(c)
+        network.add_client(c)
 
     server_opt = optax.sgd(1)
-    server_opt_state = server_opt.init(params)
     # if attack == "onoff":
-    #   network.get_controller("main").add_update_transform(
-    #       ymir.fritz.onoff.GradientTransform(
-    #           params, server_opt, server_opt_state, network, getattr(ymir.garrison, aggregation),
+    #   network.add_update_transform(
+    #       onoff.GradientTransform(
+    #           params, server_opt, server_opt_state, network, getattr(ymir.server, aggregation),
     #           network.clients[-num_adversaries:], 1/num_clients if aggregation == "fedavg" else 1, False,
     #           **agg_kwargs
     #       )
     #   )
     if compression == "fedzip":
-        network.get_controller("main").add_update_transform(lambda g: compression_lib.fedzip.encode(g, False))
-        network.get_controller("main").add_update_transform(compression_lib.fedzip.Decode(params))
+        network.add_update_transform(lambda g: compression_lib.fedzip.encode(g, False))
+        network.add_update_transform(compression_lib.fedzip.Decode(params))
     elif compression == "ae":
-        coder = ymir.mp.compression.ae.Coder(params, num_clients)
-        network.get_controller("main").add_update_transform(compression_lib.ae.Encode(coder))
-        network.get_controller("main").add_update_transform(compression_lib.ae.Decode(params, coder))
-    model = getattr(ymir.garrison, aggregation).Server(params, server_opt, server_opt_state, network, rng, **agg_kwargs)
-    meter = ymir.mp.metrics.Neurometer(net, {'train': train_eval, 'test': test_eval})
+        coder = compression_lib.ae.Coder(params, num_clients)
+        network.add_update_transform(compression_lib.ae.Encode(coder))
+        network.add_update_transform(compression_lib.ae.Decode(params, coder))
+    server = getattr(ymir.server, aggregation).Server(network, params, opt=server_opt, rng=rng, **agg_kwargs)
 
     print("Done, beginning training.")
-    asrs = []
+    accuracy = accuracy_fn(net)
+    asr = asr_fn(net, attack_from, attack_to)
+    asrs, accs = [], []
 
     # Train/eval loop.
     for r in (pbar := trange(total_rounds)):
-        if r % 10 == 0:
-            results = meter.measure(model.params, ['test'], {'from': attack_from, 'to': attack_to, 'datasets': ['test']})
-            pbar.set_postfix({'ACC': f"{results['test acc']:.3f}", 'ASR': f"{results['test asr']:.3f}"})
-            asrs.append(results['test asr'])
-        model.step()
+        acc_val = accuracy(server.params, *next(test_eval))
+        asr_val = asr(server.params, *next(test_eval))
+        pbar.set_postfix({'ACC': f"{acc_val:.3f}", 'ASR': f"{asr_val:.3f}"})
+        accs.append(acc_val)
+        asrs.append(asr_val)
+        server.step()
 
     cur_results = {
         "Dataset": dataset_name,
@@ -119,7 +154,9 @@ def main(args):
         "Attack": attack,
         "Adv.": f"{percent_adv:.0%}",
         "Mean ASR": np.array(asrs).mean(),
-        "STD ASR": np.array(asrs).std()
+        "STD ASR": np.array(asrs).std(),
+        "Mean ACC": np.array(accs).mean(),
+        "STD ACC": np.array(accs).std(),
     }
 
     result_file = "results.xlsx"
