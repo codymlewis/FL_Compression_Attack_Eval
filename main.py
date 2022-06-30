@@ -12,11 +12,11 @@ import pandas as pd
 from tqdm import trange
 import datasets
 import einops
-import ymir
 
 import models
-import network as network_lib
 import compression as compression_lib
+
+import fl
 
 
 def ce_loss(model):
@@ -89,9 +89,9 @@ def main(args):
         agg_kwargs['eps'] = 3758
 
     # Setup the dataset
-    dataset = ymir.utils.datasets.Dataset(load_dataset(dataset_name))
+    dataset = fl.utils.datasets.Dataset(load_dataset(dataset_name))
     batch_sizes = [32 for _ in range(num_clients)]
-    data = dataset.fed_split(batch_sizes, ymir.utils.distributions.lda, rng)
+    data = dataset.fed_split(batch_sizes, fl.utils.distributions.lda, rng)
     train_eval = dataset.get_iter("train", 10_000, rng=rng)
     test_eval = dataset.get_iter("test", rng=rng)
 
@@ -101,22 +101,22 @@ def main(args):
     else:
         net = model.CNN(dataset.classes)
     if compression == "fedprox":
-        client_opt = ymir.client.fedprox.pgd(optax.sgd(0.1), 0.01, local_epochs=local_epochs)
+        client_opt = fl.client.fedprox.pgd(optax.sgd(0.1), 0.01, local_epochs=local_epochs)
     else:
         client_opt = optax.sgd(0.1)
     params = net.init(jax.random.PRNGKey(42), next(test_eval)[0])
     if compression == "fedmax":
-        loss_fn = ymir.client.fedmax.loss
+        loss_fn = fl.client.fedmax.loss
     else:
         loss_fn = ce_loss
     global network
-    network = network_lib.Network()
+    network = fl.utils.network.Network()
     for i in range(num_honest):
-        network.add_client(ymir.client.Client(params, client_opt, loss_fn(net.clone()), data[i], local_epochs))
+        network.add_client(fl.client.Client(params, client_opt, loss_fn(net.clone()), data[i], local_epochs))
     for i in range(num_adversaries):
         adv_data = dataset.get_iter("train", 32, rng=rng)
-        c = ymir.client.Client(params, client_opt, loss_fn(net.clone()), adv_data, local_epochs)
-        ymir.attacks.label_flipper.convert(c, attack_from, attack_to)
+        c = fl.client.Client(params, client_opt, loss_fn(net.clone()), adv_data, local_epochs)
+        fl.attacks.label_flipper.convert(c, attack_from, attack_to)
         network.add_client(c)
 
     server_opt = optax.sgd(1)
@@ -127,7 +127,7 @@ def main(args):
         coder = compression_lib.ae.Coder(params, num_clients)
         network.add_update_transform(compression_lib.ae.Encode(coder))
         network.add_update_transform(compression_lib.ae.Decode(params, coder))
-    server = getattr(ymir.server, aggregation).Server(network, params, opt=server_opt, rng=rng, **agg_kwargs)
+    server = getattr(fl.server, aggregation).Server(network, params, opt=server_opt, rng=rng, **agg_kwargs)
 
     print("Done, beginning training.")
     accuracy = accuracy_fn(net)
