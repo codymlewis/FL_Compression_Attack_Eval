@@ -29,30 +29,30 @@ def _update(opt, loss):
 
     return _apply
 
-
 class AutoEncoder(nn.Module):
     input_len: int
 
-    @nn.compact
+    def setup(self):
+        self.encoder = nn.Sequential([
+            nn.Dense(64), nn.relu,
+            nn.Dense(32), nn.relu,
+            nn.Dense(16), nn.relu,
+        ])
+        self.decoder = nn.Sequential([
+            nn.Dense(16), nn.relu,
+            nn.Dense(32), nn.relu,
+            nn.Dense(64), nn.relu,
+            nn.Dense(self.input_len), nn.sigmoid,
+        ])
+
     def __call__(self, x):
         return self.decode(self.encode(x))
 
     def encode(self, x):
-        return nn.Sequential([
-            nn.Dense(128), nn.relu,
-            nn.Dense(64), nn.relu,
-            nn.Dense(32), nn.relu,
-            nn.Dense(16), nn.relu,
-        ])(x)
+        return self.encoder(x)
 
     def decode(self, x):
-        return nn.Sequential([
-            nn.Dense(16), nn.relu,
-            nn.Dense(32), nn.relu,
-            nn.Dense(64), nn.relu,
-            nn.Dense(128), nn.relu,
-            nn.Dense(self.input_len), nn.sigmoid,
-        ])(x)
+        return self.decoder(x)
 
 # Autoencoder compression
 
@@ -69,9 +69,9 @@ class Coder:
         """
         gm_params = jax.flatten_util.ravel_pytree(gm_params)[0]
         param_size = len(gm_params)
-        model = Autoencoder(param_size)
+        model = AutoEncoder(param_size)
         self.model = model
-        loss = l2_loss(model)
+        loss = mseloss(model)
         opt = optax.adam(1e-3)
         self.updater = _update(opt, loss)
         params = model.init(jax.random.PRNGKey(0), gm_params)
@@ -86,10 +86,10 @@ class Coder:
 
     def decode(self, all_grads):
         """Decode the updates of the clients."""
-        return [
+        return jnp.array([
             self.model.apply(self.params[i], grad, method=self.model.decode)
             for i, grad in enumerate(all_grads)
-        ]
+        ])
 
     def add_data(self, grad, i):
         """Add the updates of the client i to the ith dataset."""

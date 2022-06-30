@@ -10,14 +10,14 @@ from sklearn import cluster
 # Endpoint-side FedZip functionality
 
 
-def encode(all_grads, compress=True):
+def encode(all_grads, compress=False):
     """Compress all of the updates, performs a lossy-compression then if compress is True, a lossless compression encoding."""
     return [_encode(g, compress=compress) for g in all_grads]
 
 
-def _encode(grads, compress=True):
-    sparse_grads = [_top_z(0.3, np.array(g)) for g in grads]
-    quantized_grads = [_k_means(g) for g in sparse_grads]
+def _encode(grads, compress):
+    sparse_grads = _top_z(0.3, np.array(grads))
+    quantized_grads = _k_means(sparse_grads)
     if compress:
         encoded_grads = []
         codings = []

@@ -47,15 +47,19 @@ def asr_fn(model, attack_from, attack_to):
 
 def load_dataset(dataset_name):
     ds = datasets.load_dataset(dataset_name)
+    if dataset_name == "mnist":
+        h, w, c = 28, 28, 1
+    else:
+        h, w, c = 32, 32, 3
     ds = ds.map(
         lambda e: {
-            'X': einops.rearrange(np.array(e['image'], dtype=np.float32) / 255, "h (w c) -> h w c", c=1),
+            'X': einops.rearrange(np.array(e['image'], dtype=np.float32) / 255, "h (w c) -> h w c", c=c),
             'Y': e['label']
         },
         remove_columns=['image', 'label']
     )
     features = ds['train'].features
-    features['X'] = datasets.Array3D(shape=(28, 28, 1), dtype='float32')
+    features['X'] = datasets.Array3D(shape=(h, w, c), dtype='float32')
     ds['train'] = ds['train'].cast(features)
     ds['test'] = ds['test'].cast(features)
     ds.set_format('numpy')
@@ -65,14 +69,13 @@ def load_dataset(dataset_name):
 def main(args):
     dataset_name = args.dataset
     aggregation = args.agg
-    attack = args.attack
     attack_from, attack_to = (0, 1)
     percent_adv = args.aper
     compression = args.comp
     local_epochs = 10
     total_rounds = 500
 
-    print(f"Running a {compression}-{aggregation} system on {dataset_name} with {percent_adv:.0%} {attack} adversaries.")
+    print(f"Running a {compression}-{aggregation} system on {dataset_name} with {percent_adv:.0%} adversaries.")
     print("Setting up the system...")
     num_clients = 10
     num_adversaries = int(num_clients * percent_adv)
@@ -93,7 +96,10 @@ def main(args):
     test_eval = dataset.get_iter("test", rng=rng)
 
     # Setup the network
-    net = models.LeNet(dataset.classes)
+    if dataset_name == "mnist":
+        net = models.LeNet(dataset.classes)
+    else:
+        net = model.CNN(dataset.classes)
     if compression == "fedprox":
         client_opt = ymir.client.fedprox.pgd(optax.sgd(0.1), 0.01, local_epochs=local_epochs)
     else:
@@ -111,19 +117,9 @@ def main(args):
         adv_data = dataset.get_iter("train", 32, rng=rng)
         c = ymir.client.Client(params, client_opt, loss_fn(net.clone()), adv_data, local_epochs)
         ymir.attacks.label_flipper.convert(c, attack_from, attack_to)
-        # if attack == "onoff":
-        #   onoff.convert(c)
         network.add_client(c)
 
     server_opt = optax.sgd(1)
-    # if attack == "onoff":
-    #   network.add_update_transform(
-    #       onoff.GradientTransform(
-    #           params, server_opt, server_opt_state, network, getattr(ymir.server, aggregation),
-    #           network.clients[-num_adversaries:], 1/num_clients if aggregation == "fedavg" else 1, False,
-    #           **agg_kwargs
-    #       )
-    #   )
     if compression == "fedzip":
         network.add_update_transform(lambda g: compression_lib.fedzip.encode(g, False))
         network.add_update_transform(compression_lib.fedzip.Decode(params))
@@ -151,7 +147,6 @@ def main(args):
         "Dataset": dataset_name,
         "Compression": compression,
         "Aggregation": aggregation,
-        "Attack": attack,
         "Adv.": f"{percent_adv:.0%}",
         "Mean ASR": np.array(asrs).mean(),
         "STD ASR": np.array(asrs).std(),
@@ -175,7 +170,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run the reiny main experiment.')
     parser.add_argument('--agg', type=str, default="fedavg", help='Aggregation algorithm to use')
     parser.add_argument('--comp', type=str, default="fedmax", help='Compression algorithm to use')
-    parser.add_argument('--attack', type=str, default="labelflip", help='Attack to use. Options: onoff, labelflip')
     parser.add_argument('--dataset', type=str, default="mnist", help='Dataset to use')
     parser.add_argument('--aper', type=float, default=0.3, help='Percentage of adversaries in the network')
     args = parser.parse_args()

@@ -1,6 +1,6 @@
 pandas
 openpyxl
 tqdm
-git+https://github.com/codymlewis/hkzoo.git@3f87526
-git+https://github.com/codymlewis/tenjin.git@0a2747b
-git+https://github.com/codymlewis/ymir.git@99e16c7
+flax
+einops
+datasets

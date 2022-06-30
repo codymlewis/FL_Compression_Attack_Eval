@@ -1,4 +1,5 @@
 import numpy as np
+import jax.numpy as jnp
 import ymir
 
 
@@ -14,4 +15,4 @@ class Network(ymir.utils.network.Network):
         updates, losses, data = super().__call__(params, rng, return_weights)
         for transform in self.update_transforms:
             updates = transform(updates)
-        return updates, losses, data
+        return jnp.array(updates), losses, data
