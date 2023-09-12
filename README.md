@@ -1,4 +1,4 @@
-# Reiny
+# Federated Learning Compression: Evaluation of the Impacts of Model Poisoning
 
 A project evaluating how federated learning attacks and defense are impacted by techniques that reduce
 communication overhead.
